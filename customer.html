@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Polygon Data Viewer</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 20px;
+    }
+
+    h1 {
+      color: #333;
+    }
+
+    #map {
+      height: 600px;
+      width: 100%;
+      margin-bottom: 20px;
+    }
+
+    .popup-content {
+      font-size: 14px;
+      font-family: Arial, sans-serif;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 20px;
+    }
+
+    table, th, td {
+      border: 1px solid #ddd;
+    }
+
+    th, td {
+      padding: 10px;
+      text-align: left;
+    }
+
+    th {
+      background-color: #f4f4f4;
+    }
+
+    .legend {
+      background: white;
+      padding: 10px;
+      border: 1px solid #ccc;
+      border-radius: 5px;
+    }
+
+    .legend h4 {
+      margin: 0 0 10px;
+    }
+
+    .legend p {
+      margin: 5px 0;
+    }
+
+  </style>
+</head>
+<body>
+
+  <h1>MTCC Marine Routes Database - Customer End</h1>
+  <div id="map"></div>
+  <h2>Polygon Data Table</h2>
+  <table id="dataTable">
+    <thead>
+      <tr>
+        <th>Atoll Name</th>
+        <th>Zone</th>
+        <th>Date</th>
+        <th>RTL Operating</th>
+        <th>RTL Cancelled</th>
+        <th>CFN Operating</th>
+        <th>CFN Cancelled</th>
+      </tr>
+    </thead>
+    <tbody>
+      <!-- Rows will be dynamically added here -->
+    </tbody>
+  </table>
+
+  <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+  <script>
+    // Initialize the map
+    const map = L.map('map').setView([13.4081, 80.1762], 13); // Default center and zoom level
+
+    // Add OpenStreetMap tile layer to the map
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© OpenStreetMap contributors'
+    }).addTo(map);
+
+    // Define a color scheme based on Zone
+    const zoneColors = {
+      "1": "#FF5733", // Orange
+      "2": "#33FF57", // Green
+      "3": "#3357FF", // Blue
+      "4": "#FF33A1", // Pink
+      "5": "#A133FF", // Purple
+      "6": "#f6ff33"
+      // Add more zones and colors as needed
+    };
+
+    // Add a legend to the map
+    const legend = L.control({ position: 'bottomright' });
+
+    legend.onAdd = () => {
+      const div = L.DomUtil.create('div', 'legend');
+      div.innerHTML = `
+        <h4>Zone Colors</h4>
+        ${Object.entries(zoneColors).map(([zone, color]) => `
+          <p><span style="background-color: ${color}; width: 20px; height: 20px; display: inline-block;"></span> ${zone}</p>
+        `).join('')}
+      `;
+      return div;
+    };
+
+    legend.addTo(map);
+
+
+    // Fetch GeoJSON data from the zones.geojson file
+    fetch('/zones.geojson')
+      .then(response => response.json())
+      .then(geoJsonData => {
+        const geoJsonLayer = L.geoJSON(geoJsonData, {
+          style: (feature) => {
+            // Get the Zone from the feature properties
+            const zone = feature.properties.Zone || 'Unknown';
+
+            // Assign a color based on the Zone
+            const color = zoneColors[zone] || "#CCCCCC"; // Default to gray if Zone is not found
+
+            return {
+              color: color,  // Polygon border color
+              weight: 2,     // Polygon border thickness
+              fillOpacity: 0.5,  // Polygon fill opacity
+            };
+          },
+          onEachFeature: (feature, layer) => {
+            if (feature.properties) {
+              layer.on('click', () => {
+                const polygonId = feature.properties.fid;
+
+                // Fetch data for the clicked polygon
+                fetch(`http://localhost:3000/api/data/${polygonId}`)
+                  .then(response => response.json())
+                  .then(data => {
+                    // Create popup content with Atoll Name, Zone, and textarea data
+                    const popupContent = `
+                      <div class="popup-content">
+                        <strong>Atoll Name:</strong> ${feature.properties["Atoll Name"] || 'N/A'}<br>
+                        <strong>Zone:</strong> ${feature.properties.Zone || 'N/A'}<br>
+                        <strong>Routes Data:</strong>
+                        <ul>
+                          ${data.map(entry => `
+                            <li>
+                              <strong>RTL Operating Routes:</strong> ${entry.rtlOperatingRoutes || 'N/A'}<br>
+                              <strong>RTL Cancelled Routes:</strong> ${entry.rtlCancelledRoutes || 'N/A'}<br>
+                              <strong>CFN Operating Routes:</strong> ${entry.cfnOperatingRoutes || 'N/A'}<br>
+                              <strong>CFN Cancelled Routes:</strong> ${entry.cfnCancelledRoutes || 'N/A'}
+                            </li>
+                          `).join('')}
+                        </ul>
+                      </div>
+                    `;
+
+                    layer.bindPopup(popupContent).openPopup();
+                  })
+                  .catch(error => {
+                    console.error('Error fetching polygon data:', error);
+                    layer.bindPopup('<div class="popup-content">Error loading data. Please try again later.</div>').openPopup();
+                  });
+              });
+            }
+          },
+        }).addTo(map);
+
+        const bounds = geoJsonLayer.getBounds();
+        map.fitBounds(bounds);
+        fetchDataAndUpdateTable(geoJsonData);
+      })
+      .catch(error => console.error('Error fetching zones.geojson:', error));
+
+    function fetchDataAndUpdateTable(geoJsonData) {
+      fetch('http://localhost:3000/api/data')
+        .then(response => response.json())
+        .then(data => {
+          const tableBody = document.querySelector('#dataTable tbody');
+          tableBody.innerHTML = '';
+
+          geoJsonData.features.forEach(feature => {
+            const polygonId = feature.properties.fid;
+            const atollName = feature.properties["Atoll Name"] || 'N/A';
+            const zone = feature.properties.Zone || 'N/A';
+
+            const polygonData = data[polygonId] || [{
+              date: 'N/A',
+              rtlOperating: 'N/A',
+              rtlCancelled: 'N/A',
+              cfnOperating: 'N/A',
+              cfnCancelled: 'N/A',
+            }];
+
+            polygonData.forEach(entry => {
+              const row = document.createElement('tr');
+              row.innerHTML = `
+                <td>${atollName}</td>
+                <td>${zone}</td>
+                <td>${entry.date}</td>
+                <td>${entry.rtlOperating}</td>
+                <td>${entry.rtlCancelled}</td>
+                <td>${entry.cfnOperating}</td>
+                <td>${entry.cfnCancelled}</td>
+              `;
+              tableBody.appendChild(row);
+            });
+          });
+        })
+        .catch(error => console.error('Error fetching polygon data:', error));
+    }
+  </script>
+
+</body>
+</html>
